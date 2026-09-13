@@ -3,6 +3,17 @@
 This is the same DevBoard UI as the `master` branch, but now the data comes
 from a **real backend** instead of fake in-memory data.
 
+## Live demo
+
+Deployed automatically by the CI/CD pipeline below, running on an AWS EC2 instance:
+
+- **App:** http://98.93.225.222:8080
+- **Backend health check:** http://98.93.225.222:8081/health
+
+| Local | Live on AWS |
+| --- | --- |
+| ![Local dashboard](screenshots/local-dashboard.png) | ![AWS live dashboard](screenshots/aws-live-dashboard.png) |
+
 Three pieces talk to each other:
 
 ```
@@ -229,7 +240,51 @@ The browser calls these as `/api/...`; the backend serves them at the root.
 
 ## CI/CD DevSecOps Setup
 
-The repository contains GitHub Actions workflows configured with SonarQube (SAST) and OWASP ZAP (DAST) scanning.
+Every push to `master` runs a full DevSecOps pipeline (`.github/workflows/devsecops.yml`) —
+12 jobs, no manual steps:
+
+| Stage | Jobs | What it checks |
+| --- | --- | --- |
+| **Test** | `code-tests` | Go + React unit tests |
+| **Static analysis** | `code-quality` (SAST), `sonar-qube` | linting, `go vet`, SonarQube scan |
+| **Security scans** | `secret-scanning`, `dependency-checks`, `docker-checks` | Gitleaks, govulncheck + npm audit, Hadolint + Trivy on both Dockerfiles |
+| **Build & publish** | `docker-push` | builds and pushes `frontend`/`backend` images to Docker Hub |
+| **Deploy** | `deploy` | pulls the new images and runs `docker compose up -d` on a self-hosted runner |
+| **DAST** | `dast-scan` | OWASP ZAP baseline scan against the live deployment |
+
+`deploy` and `dast-scan` only run after everything upstream is green.
+
+### Required repository configuration (Settings → Secrets and variables → Actions)
+
+| Name | Kind | Purpose |
+| --- | --- | --- |
+| `DOCKERHUB_USERNAME` | **Variable** | Docker Hub account the images are pushed to (`vars.DOCKERHUB_USERNAME` — not a secret, so it must be a *variable*, not a secret) |
+| `DOCKERHUB_TOKEN` | Secret | Docker Hub PAT used to authenticate the push |
+| `SONAR_TOKEN` | Secret | SonarQube auth token |
+| `SONAR_HOST_URL` | Secret | URL of the SonarQube server |
+| `EC2_HOST` | Secret | Public IP/hostname of the deploy target, used to build the DAST scan's target URL |
+
+### Self-hosted runner (for `deploy`)
+
+The `deploy` job targets `runs-on: self-hosted` because it needs to run `docker compose`
+directly on the deployment host. Set one up on the EC2 instance:
+
+1. GitHub repo → **Settings → Actions → Runners → New self-hosted runner**, pick Linux x64,
+   and copy the registration token it gives you.
+2. On the EC2 instance:
+   ```bash
+   mkdir actions-runner && cd actions-runner
+   curl -o actions-runner-linux-x64.tar.gz -L <download URL from the GitHub page>
+   tar xzf ./actions-runner-linux-x64.tar.gz
+   ./config.sh --url https://github.com/<org>/<repo> --token <TOKEN>
+   sudo ./svc.sh install
+   sudo ./svc.sh start
+   ```
+3. Make sure the runner's user is in the `docker` group (`sudo usermod -aG docker <user>`),
+   otherwise `docker compose pull`/`up` will fail immediately with a permission error.
+4. Only register **one** runner per host — a second, unmanaged runner process will
+   register under the machine's hostname and silently compete for jobs, causing
+   flaky deploy failures when it wins the race instead of the properly configured one.
 
 ### How to Install and Set Up SonarQube on EC2
 
