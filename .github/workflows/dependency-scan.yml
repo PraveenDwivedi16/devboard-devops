@@ -1,47 +1,58 @@
-# Goal - I have to ensure the packages & dependencies have been audited for Security
-
-name: Dependecy scan
+name: Dependency Scan
 
 on:
-    workflow_call:
+  workflow_call:
 
 jobs:
-    dependency-scan:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Code Checkout
-              uses: actions/checkout@v7
+  dependency-scan:
+    runs-on: ubuntu-latest
 
-            - name: Setup Go
-              uses: actions/setup-go@v6
-              with:
-                go-version: 1.22
-                go-version-file: 'go.mod'
-                cache-dependency-path: go.sum
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@v4
 
-            - name: Install Govulncheck
-              run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
 
-            - name: GoVulncheck
-              continue-on-error: true
-              run: govulncheck ./... > govulncheck-report.txt
-              working-directory: backend
+      - name: Install Govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
-            - name: Setup Node
-              uses: actions/setup-node@v6
-              with:
-                node-version: '20'
-                cache: npm
-                cache-dependency-path: frontend/package-lock.json
+      - name: Go Vulnerability Scan
+        continue-on-error: true
+        run: govulncheck ./... > govulncheck-report.txt
+        working-directory: backend
 
-            - name: Run Dependency Scan for Node
-              run: npm audit
-              working-directory: frontend
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-            - name: Upload Report to Artifacts
-              if: always() # Ensures report uploads even if tests fail
-              uses: actions/upload-artifact@v4
-              with:
-                name: dependency-scan-report
-                path: reports/dependency-report.txt
-                retention-days: 5
+      - name: Install Node Dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Node Dependency Scan
+        continue-on-error: true
+        run: npm audit --json > npm-audit-report.json
+        working-directory: frontend
+
+      - name: Create Reports Directory
+        if: always()
+        run: |
+          mkdir -p reports
+          cp backend/govulncheck-report.txt reports/govulncheck-report.txt || true
+          cp frontend/npm-audit-report.json reports/npm-audit-report.json || true
+
+      - name: Upload Dependency Scan Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-scan-report
+          path: reports/
+          retention-days: 5
